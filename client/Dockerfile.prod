@@ -1,0 +1,25 @@
+# --- Stage 1: build ------------------------------------------------------
+# All the Vite/React build tooling lives and dies in this stage.
+FROM node:20-alpine AS build
+WORKDIR /usr/src/app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+
+# --- Stage 2: serve --------------------------------------------------------
+# Final image is just Nginx + the static dist/ output — no Node runtime,
+# no node_modules, no source. This is the sharpest size contrast of the
+# two multi-stage Dockerfiles in this project: build stage is ~300MB+
+# with node_modules, final image is a stock nginx:alpine plus a few
+# hundred KB of built assets.
+FROM nginx:1.27-alpine AS serve
+COPY --from=build /usr/src/app/dist /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+EXPOSE 80
+
+HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=5 \
+  CMD wget --spider -q http://localhost:80/ || exit 1
+
+CMD ["nginx", "-g", "daemon off;"]

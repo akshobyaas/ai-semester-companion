@@ -1,0 +1,91 @@
+version: "3.9"
+
+services:
+  mongo:
+    image: mongo:7
+    container_name: asc-mongo-prod
+    restart: unless-stopped
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - asc-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    # No "ports:" mapping here on purpose — in prod, Mongo only needs to be
+    # reachable inside the Docker network by the server container, not
+    # exposed to the host (unlike docker-compose.dev.yml, which maps
+    # 27017:27017 for local debugging with a GUI client).
+
+  redis:
+    image: redis:7-alpine
+    container_name: asc-redis-prod
+    restart: unless-stopped
+    networks:
+      - asc-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile.prod
+    image: ai-semester-companion-server:prod
+    container_name: asc-server-prod
+    restart: unless-stopped
+    env_file:
+      - ./server/.env
+    environment:
+      - NODE_ENV=production
+      - MONGODB_URI=mongodb://mongo:27017/learningagent
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    networks:
+      - asc-network
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:8000/api/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  client:
+    build:
+      context: ./client
+      dockerfile: Dockerfile.prod
+    image: ai-semester-companion-client:prod
+    container_name: asc-client-prod
+    restart: unless-stopped
+    depends_on:
+      server:
+        condition: service_healthy
+    ports:
+      - "80:80"
+    networks:
+      - asc-network
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:80/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+networks:
+  asc-network:
+    driver: bridge
+
+volumes:
+  mongo_data:

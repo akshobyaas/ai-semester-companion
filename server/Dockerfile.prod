@@ -1,0 +1,41 @@
+# --- Stage 1: deps -----------------------------------------------------
+# Installs ALL dependencies (needed to resolve the lockfile correctly),
+# in its own layer so it's cached independently of source changes and
+# never ships into the final image.
+FROM node:20-alpine AS deps
+WORKDIR /usr/src/app
+COPY package*.json ./
+RUN npm ci --omit=dev
+
+# --- Stage 2: runtime ----------------------------------------------------
+# Slim final image: only production node_modules (from the deps stage)
+# plus source — no npm cache, no dev tooling (nodemon/jest/supertest),
+# no package-lock churn. This is the size/layer-caching payoff of
+# multi-stage: the deps stage's resolution work is reused, but its
+# npm cache and any build-time tooling never reach this layer.
+FROM node:20-alpine AS runtime
+WORKDIR /usr/src/app
+ENV NODE_ENV=production
+
+# Run as a non-root user rather than the image's default root —
+# a real hardening step, not just a formality, worth explaining if asked.
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+
+COPY --from=deps /usr/src/app/node_modules ./node_modules
+COPY package*.json ./
+COPY server.js ./
+COPY src ./src
+
+RUN mkdir -p data/uploads && chown -R appuser:appgroup /usr/src/app
+USER appuser
+
+EXPOSE 8000
+
+# Portable healthcheck: a plain Node http request rather than curl/wget,
+# since a slim node:alpine image has neither installed by default and
+# adding either just to healthcheck would bloat the "slim" runtime stage
+# this whole file exists to produce.
+HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=5 \
+  CMD node -e "require('http').get('http://localhost:8000/api/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
+
+CMD ["node", "server.js"]
