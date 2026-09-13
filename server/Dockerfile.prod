@@ -19,7 +19,7 @@ WORKDIR /usr/src/app
 # resolved at the source (e.g. by generating it inside Linux/CI instead of
 # on Windows).
 COPY package.json ./
-RUN npm install --omit=dev --os=linux --cpu=x64
+RUN npm cache clean --force && npm install --omit=dev --os=linux --cpu=x64 --libc=glibc
 
 # --- Stage 2: runtime ----------------------------------------------------
 # Slim final image: only production node_modules (from the deps stage)

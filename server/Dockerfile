@@ -26,7 +26,15 @@ WORKDIR /usr/src/app
 # than inheriting whatever a Windows npm run happened to lock in.
 COPY package.json ./
 
-RUN npm install --os=linux --cpu=x64
+# Clean npm's cache first: it can hold a prebuilt native binary fetched
+# during an earlier build (e.g. from before the base image was switched
+# from Alpine to Debian) and reuse it even when nothing else points to
+# musl. That is confirmed to be exactly what was happening here — sharp's
+# installer kept producing a musl (Alpine) binary inside this glibc
+# (Debian) image no matter what other flags were set, because a stale
+# musl prebuild was sitting in the cache. --libc=glibc makes the target
+# explicit rather than relying on auto-detection at all.
+RUN npm cache clean --force && npm install --os=linux --cpu=x64 --libc=glibc
 
 # Source is bind-mounted over this in docker-compose.dev.yml,
 # this COPY just makes the image runnable standalone too.
