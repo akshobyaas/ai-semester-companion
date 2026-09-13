@@ -7,22 +7,19 @@
 # for why: onnxruntime-node needs glibc, which Alpine doesn't have.
 FROM node:20-slim AS deps
 WORKDIR /usr/src/app
-COPY package*.json ./
 
-# --os/--cpu forces npm to fetch the Linux x64 build of native optional
-# dependencies (like @napi-rs/canvas, pulled in via pdf-parse) regardless
-# of what platform generated the committed package-lock.json.
-RUN npm ci --omit=dev --os=linux --cpu=x64
-
-# sharp@0.32.6 (a transitive dependency) predates the modern per-platform
-# @img/sharp-* package split and has NO optionalDependencies at all — the
-# --os/--cpu flags above do nothing for it. It installs its native binary
-# via a postinstall script (prebuild-install), which is what actually
-# needs to target linux/x64 explicitly. Verified directly: without this
-# line, sharp's binary is missing at require-time; with it, sharp loads
-# correctly. This is the exact command sharp's own runtime error message
-# recommends for this situation.
-RUN npm install --platform=linux --arch=x64 sharp
+# Only package.json — deliberately NOT package-lock.json. See server/Dockerfile
+# (dev) for the full reasoning: the committed lockfile has been regenerated
+# by Windows npm runs at several points, and three separate native-binary
+# failures (onnxruntime-node, sharp, @napi-rs/canvas) all traced back to
+# platform-specific choices baked into that lockfile. Using npm install
+# against package.json alone forces a fresh, Linux-native resolution
+# instead. This does mean giving up npm ci's exact-lockfile reproducibility
+# in exchange for correctness — worth it until the lockfile issue is
+# resolved at the source (e.g. by generating it inside Linux/CI instead of
+# on Windows).
+COPY package.json ./
+RUN npm install --omit=dev --os=linux --cpu=x64
 
 # --- Stage 2: runtime ----------------------------------------------------
 # Slim final image: only production node_modules (from the deps stage)
