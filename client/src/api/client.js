@@ -55,6 +55,7 @@ export const ingestionAPI = {
     });
   },
   processCourse: (courseId) => api.post(`/ingestion/courses/${courseId}/process`),
+  listDocuments: (courseId) => api.get(`/ingestion/courses/${courseId}/documents`),
 };
 
 export const learningAPI = {

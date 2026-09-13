@@ -91,7 +91,22 @@ router.post("/courses/:courseId/upload", requireAuth, upload.array("files"), asy
     next(err);
   }
 });
+// GET /ingestion/courses/:courseId/documents
+router.get("/courses/:courseId/documents", requireAuth, async (req, res, next) => {
+  try {
+    const { courseId } = req.params;
 
+    const course = await Course.findOne({ _id: courseId, userId: req.user._id }).catch(() => null);
+    if (!course) {
+      return res.status(404).json({ detail: "Course not found" });
+    }
+
+    const documents = await Document.find({ courseId: course._id }).sort({ createdAt: -1 });
+    return res.json(documents.map(documentResponse));
+  } catch (err) {
+    next(err);
+  }
+});
 // POST /ingestion/courses/:courseId/process
 router.post("/courses/:courseId/process", requireAuth, async (req, res, next) => {
   try {

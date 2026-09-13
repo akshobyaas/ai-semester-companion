@@ -21,6 +21,7 @@ export default function CoursePage() {
   const [units, setUnits] = useState(null);
   const [loadingUnits, setLoadingUnits] = useState(true);
   const [progress, setProgress] = useState(null);
+  const [documents, setDocuments] = useState([]);
 
   const [files, setFiles] = useState([]);
   const [docType, setDocType] = useState("notes");
@@ -28,6 +29,13 @@ export default function CoursePage() {
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState("");
   const [statusMsg, setStatusMsg] = useState("");
+
+  const loadDocuments = useCallback(() => {
+    ingestionAPI
+      .listDocuments(courseId)
+      .then((res) => setDocuments(res.data))
+      .catch(() => {});
+  }, [courseId]);
 
   const loadUnits = useCallback(() => {
     setLoadingUnits(true);
@@ -44,7 +52,8 @@ export default function CoursePage() {
 
   useEffect(() => {
     loadUnits();
-  }, [loadUnits]);
+    loadDocuments();
+  }, [loadUnits, loadDocuments]);
 
   const handleUpload = async (e) => {
     e.preventDefault();
@@ -58,6 +67,7 @@ export default function CoursePage() {
       await ingestionAPI.uploadDocuments(courseId, files, docType);
       setStatusMsg(`${files.length} file(s) uploaded. Ready to build your roadmap.`);
       setFiles([]);
+      loadDocuments();
     } catch (err) {
       setError(err.response?.data?.detail || "Upload failed.");
     } finally {
@@ -73,6 +83,7 @@ export default function CoursePage() {
       await ingestionAPI.processCourse(courseId);
       setStatusMsg("Roadmap ready!");
       loadUnits();
+      loadDocuments();
     } catch (err) {
       setError(err.response?.data?.detail || "Processing failed.");
       setStatusMsg("");
@@ -158,6 +169,37 @@ export default function CoursePage() {
             </button>
           </div>
         </form>
+
+        {documents.length > 0 && (
+          <div className="bg-white border border-primary-100 rounded-3xl p-6 mb-8">
+            <h2 className="font-display font-semibold text-lg text-ink-900 mb-4">Uploaded material</h2>
+            <div className="space-y-2">
+              {documents.map((doc) => (
+                <div
+                  key={doc.id}
+                  className="flex items-center justify-between gap-3 px-4 py-3 rounded-2xl bg-cream/60"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <FileText size={18} className="text-ink-400 shrink-0" />
+                    <div className="min-w-0">
+                      <p className="font-medium text-ink-900 truncate">{doc.filename}</p>
+                      <p className="text-xs text-ink-400 capitalize">
+                        {doc.doc_type} · {new Date(doc.created_at).toLocaleDateString()}
+                      </p>
+                    </div>
+                  </div>
+                  <span
+                    className={`shrink-0 text-xs font-medium px-3 py-1 rounded-full ${
+                      doc.processed ? "bg-primary-50 text-primary-700" : "bg-amber-50 text-amber-700"
+                    }`}
+                  >
+                    {doc.processed ? "Processed" : "Pending"}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Roadmap path */}
         {loadingUnits ? (
