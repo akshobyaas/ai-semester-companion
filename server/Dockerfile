@@ -1,6 +1,16 @@
 # Dev image — favors fast iteration (nodemon + bind mount) over a small final size.
 # The production, multi-stage version of this file is built in Phase 19.
-FROM node:20-alpine
+#
+# node:20-slim (Debian), NOT node:20-alpine: onnxruntime-node — a dependency
+# of @xenova/transformers, used for local embeddings — ships a prebuilt
+# native binary linked against glibc. Alpine uses musl libc instead, so the
+# binary fails to load at runtime (ld-linux-x86-64.so.2: No such file or
+# directory) and crashes the whole process the first time embeddings are
+# generated, not at build time — this only surfaces when /process actually
+# runs. Alpine's glibc-compatibility packages are explicitly documented as
+# "experimental" and unreliable for this class of problem, so switching the
+# base image is the correct fix, not a workaround.
+FROM node:20-slim
 
 WORKDIR /usr/src/app
 

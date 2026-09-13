@@ -2,7 +2,10 @@
 # Installs ALL dependencies (needed to resolve the lockfile correctly),
 # in its own layer so it's cached independently of source changes and
 # never ships into the final image.
-FROM node:20-alpine AS deps
+#
+# node:20-slim (Debian), NOT node:20-alpine — see the runtime stage below
+# for why: onnxruntime-node needs glibc, which Alpine doesn't have.
+FROM node:20-slim AS deps
 WORKDIR /usr/src/app
 COPY package*.json ./
 RUN npm ci --omit=dev
@@ -13,13 +16,24 @@ RUN npm ci --omit=dev
 # no package-lock churn. This is the size/layer-caching payoff of
 # multi-stage: the deps stage's resolution work is reused, but its
 # npm cache and any build-time tooling never reach this layer.
-FROM node:20-alpine AS runtime
+#
+# Debian slim, not Alpine: onnxruntime-node (a dependency of
+# @xenova/transformers, used for local embeddings) ships a prebuilt native
+# binary linked against glibc. Alpine's musl libc can't load it
+# (ld-linux-x86-64.so.2: No such file or directory), which crashes the
+# whole server process the first time embeddings run — not at build time,
+# so this only surfaces during real use. This is a well-documented class
+# of issue with no reliable Alpine-side fix (Alpine's glibc-compat
+# packages are explicitly "experimental"), so the base image is the right
+# thing to change here, not a workaround layered on top of it.
+FROM node:20-slim AS runtime
 WORKDIR /usr/src/app
 ENV NODE_ENV=production
 
-# Run as a non-root user rather than the image's default root —
-# a real hardening step, not just a formality, worth explaining if asked.
-RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+# Run as a non-root user rather than the image's default root — a real
+# hardening step, not just a formality. Debian's useradd/groupadd here,
+# not Alpine's BusyBox addgroup/adduser, to match the new base image.
+RUN groupadd --system appgroup && useradd --system --gid appgroup appuser
 
 COPY --from=deps /usr/src/app/node_modules ./node_modules
 COPY package*.json ./
@@ -31,10 +45,9 @@ USER appuser
 
 EXPOSE 8000
 
-# Portable healthcheck: a plain Node http request rather than curl/wget,
-# since a slim node:alpine image has neither installed by default and
-# adding either just to healthcheck would bloat the "slim" runtime stage
-# this whole file exists to produce.
+# Portable healthcheck: a plain Node http request rather than curl/wget.
+# Debian slim doesn't ship either by default, and adding one just for a
+# healthcheck would work against the point of using a slim image.
 HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=5 \
   CMD node -e "require('http').get('http://localhost:8000/api/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
 
