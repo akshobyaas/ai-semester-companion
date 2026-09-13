@@ -22,15 +22,16 @@ COPY package*.json ./
 # of what platform generated the committed package-lock.json.
 RUN npm install --os=linux --cpu=x64
 
-# sharp@0.32.6 (a transitive dependency) predates the modern per-platform
-# @img/sharp-* package split and has NO optionalDependencies at all — the
-# --os/--cpu flags above do nothing for it. It installs its native binary
-# via a postinstall script (prebuild-install), which is what actually
-# needs to target linux/x64 explicitly. Verified directly: without this
-# line, sharp's binary is missing at require-time; with it, sharp loads
-# correctly. This is the exact command sharp's own runtime error message
-# recommends for this situation.
-RUN npm install --platform=linux --arch=x64 sharp
+# DIAGNOSTIC STEP — the previous fix (--platform/--arch) did not resolve
+# this, which means the actual failure is something other than what was
+# assumed. Running with --verbose --foreground-scripts (sharp's own first
+# suggested diagnostic) to surface the real underlying error in the build
+# log — likely either a failed download of the prebuilt binary (network
+# restriction inside this specific Docker/WSL2 setup) or a failed
+# source-compile fallback (node:20-slim has no C++ build tools installed).
+# This build is expected to still fail; the point is capturing what it
+# says now, not fixing it blind a fourth time.
+RUN npm install --ignore-scripts=false --foreground-scripts --verbose --platform=linux --arch=x64 sharp
 
 # Source is bind-mounted over this in docker-compose.dev.yml,
 # this COPY just makes the image runnable standalone too.
