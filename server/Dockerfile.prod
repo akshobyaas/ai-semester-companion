@@ -8,7 +8,12 @@
 FROM node:20-slim AS deps
 WORKDIR /usr/src/app
 COPY package*.json ./
-RUN npm ci --omit=dev
+
+# See server/Dockerfile (dev) for why these flags are needed — sharp's own
+# documented fix for a lockfile generated on a different platform than
+# the container runs. Also covers @napi-rs/canvas (pulled in transitively
+# via pdf-parse), which ships the same kind of per-platform binaries.
+RUN npm ci --omit=dev --os=linux --cpu=x64
 
 # --- Stage 2: runtime ----------------------------------------------------
 # Slim final image: only production node_modules (from the deps stage)

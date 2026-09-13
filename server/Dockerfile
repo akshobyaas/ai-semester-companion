@@ -16,7 +16,14 @@ WORKDIR /usr/src/app
 
 # Install deps first so this layer is cached unless package.json changes
 COPY package*.json ./
-RUN npm install
+
+# --os/--cpu forces npm to fetch the Linux x64 build of native optional
+# dependencies (sharp, onnxruntime-node, @napi-rs/canvas via pdf-parse)
+# regardless of what platform generated the committed package-lock.json.
+# This is sharp's own documented fix for exactly this scenario: "building
+# your deployment package on a machine that differs from the target" —
+# our lockfile was generated on Windows, this container runs Linux.
+RUN npm install --os=linux --cpu=x64
 
 # Source is bind-mounted over this in docker-compose.dev.yml,
 # this COPY just makes the image runnable standalone too.
