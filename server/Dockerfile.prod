@@ -9,11 +9,20 @@ FROM node:20-slim AS deps
 WORKDIR /usr/src/app
 COPY package*.json ./
 
-# See server/Dockerfile (dev) for why these flags are needed — sharp's own
-# documented fix for a lockfile generated on a different platform than
-# the container runs. Also covers @napi-rs/canvas (pulled in transitively
-# via pdf-parse), which ships the same kind of per-platform binaries.
+# --os/--cpu forces npm to fetch the Linux x64 build of native optional
+# dependencies (like @napi-rs/canvas, pulled in via pdf-parse) regardless
+# of what platform generated the committed package-lock.json.
 RUN npm ci --omit=dev --os=linux --cpu=x64
+
+# sharp@0.32.6 (a transitive dependency) predates the modern per-platform
+# @img/sharp-* package split and has NO optionalDependencies at all — the
+# --os/--cpu flags above do nothing for it. It installs its native binary
+# via a postinstall script (prebuild-install), which is what actually
+# needs to target linux/x64 explicitly. Verified directly: without this
+# line, sharp's binary is missing at require-time; with it, sharp loads
+# correctly. This is the exact command sharp's own runtime error message
+# recommends for this situation.
+RUN npm install --platform=linux --arch=x64 sharp
 
 # --- Stage 2: runtime ----------------------------------------------------
 # Slim final image: only production node_modules (from the deps stage)

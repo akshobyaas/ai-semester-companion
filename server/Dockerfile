@@ -18,12 +18,19 @@ WORKDIR /usr/src/app
 COPY package*.json ./
 
 # --os/--cpu forces npm to fetch the Linux x64 build of native optional
-# dependencies (sharp, onnxruntime-node, @napi-rs/canvas via pdf-parse)
-# regardless of what platform generated the committed package-lock.json.
-# This is sharp's own documented fix for exactly this scenario: "building
-# your deployment package on a machine that differs from the target" —
-# our lockfile was generated on Windows, this container runs Linux.
+# dependencies (like @napi-rs/canvas, pulled in via pdf-parse) regardless
+# of what platform generated the committed package-lock.json.
 RUN npm install --os=linux --cpu=x64
+
+# sharp@0.32.6 (a transitive dependency) predates the modern per-platform
+# @img/sharp-* package split and has NO optionalDependencies at all — the
+# --os/--cpu flags above do nothing for it. It installs its native binary
+# via a postinstall script (prebuild-install), which is what actually
+# needs to target linux/x64 explicitly. Verified directly: without this
+# line, sharp's binary is missing at require-time; with it, sharp loads
+# correctly. This is the exact command sharp's own runtime error message
+# recommends for this situation.
+RUN npm install --platform=linux --arch=x64 sharp
 
 # Source is bind-mounted over this in docker-compose.dev.yml,
 # this COPY just makes the image runnable standalone too.
