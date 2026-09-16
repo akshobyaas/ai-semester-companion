@@ -184,6 +184,20 @@ router.post("/courses/:courseId/process", requireAuth, async (req, res, next) =>
       pipelineResults[phase] = { success: result.success, error: result.error };
     }
 
+    // The route was previously returning 200 unconditionally, even when a
+    // phase failed (e.g. the Gemini API call erroring) — the frontend then
+    // showed a false "Roadmap ready!" success message. Surface a real
+    // error status here, with the actual failing phase's message, when any
+    // phase in the pipeline didn't succeed.
+    const failedPhase = Object.entries(results).find(([, result]) => !result.success);
+    if (failedPhase) {
+      const [phaseName, result] = failedPhase;
+      return res.status(502).json({
+        detail: `Processing failed at ${phaseName}: ${result.error}`,
+        pipeline_results: pipelineResults,
+      });
+    }
+
     return res.json({
       status: "success",
       message: "Course processed successfully",
