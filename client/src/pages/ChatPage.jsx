@@ -35,7 +35,7 @@ export default function ChatPage() {
     setError("");
 
     try {
-      const res = await adaptiveAPI.askDoubt({ message: question });
+      const res = await adaptiveAPI.askDoubt({ message: question, course_id: courseId });
       setMessages((m) => [...m, { role: "assistant", content: res.data.answer, sources: res.data.sources }]);
     } catch (err) {
       setError(err.response?.data?.detail || "Couldn't get an answer. Try again.");

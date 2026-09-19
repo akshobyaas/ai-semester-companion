@@ -3,6 +3,7 @@ const { Topic, Unit, UserProgress, Roadmap } = require("../models");
 const { requireAuth } = require("../middleware/auth.middleware");
 const { agentRuntime } = require("../agents");
 const { AgentContext } = require("../agents/base");
+const { findOwnedCourse, findOwnedTopic } = require("../services/ownership");
 
 const router = express.Router();
 
@@ -19,6 +20,10 @@ const router = express.Router();
 // GET /learning/courses/:courseId/roadmap
 router.get("/courses/:courseId/roadmap", requireAuth, async (req, res, next) => {
   try {
+    if (!(await findOwnedCourse(req.params.courseId, req.user._id))) {
+      return res.status(404).json({ detail: "Course not found" });
+    }
+
     const roadmap = await Roadmap.findOne({ courseId: req.params.courseId });
     if (!roadmap) {
       return res.status(404).json({ detail: "Roadmap not generated yet. Process the course first." });
@@ -38,6 +43,10 @@ router.get("/courses/:courseId/roadmap", requireAuth, async (req, res, next) => 
 // GET /learning/courses/:courseId/units
 router.get("/courses/:courseId/units", requireAuth, async (req, res, next) => {
   try {
+    if (!(await findOwnedCourse(req.params.courseId, req.user._id))) {
+      return res.status(404).json({ detail: "Course not found" });
+    }
+
     const units = await Unit.find({ courseId: req.params.courseId }).sort({ orderIndex: 1 });
     const unitIds = units.map((u) => u._id);
     const topics = await Topic.find({ unitId: { $in: unitIds } }).sort({ orderIndex: 1 });
@@ -76,6 +85,10 @@ router.get("/courses/:courseId/units", requireAuth, async (req, res, next) => {
 // GET /learning/courses/:courseId/progress
 router.get("/courses/:courseId/progress", requireAuth, async (req, res, next) => {
   try {
+    if (!(await findOwnedCourse(req.params.courseId, req.user._id))) {
+      return res.status(404).json({ detail: "Course not found" });
+    }
+
     const unitIds = await Unit.find({ courseId: req.params.courseId }).distinct("_id");
     const allTopics = await Topic.find({ unitId: { $in: unitIds } });
     const topicIds = allTopics.map((t) => t._id);
@@ -115,6 +128,10 @@ router.get("/courses/:courseId/progress", requireAuth, async (req, res, next) =>
 // GET /learning/courses/:courseId/next-topic
 router.get("/courses/:courseId/next-topic", requireAuth, async (req, res, next) => {
   try {
+    if (!(await findOwnedCourse(req.params.courseId, req.user._id))) {
+      return res.status(404).json({ detail: "Course not found" });
+    }
+
     const { current_topic_id: currentTopicId } = req.query;
 
     // Refetch units/topics fully ordered (order_index within each unit,
@@ -161,17 +178,16 @@ router.get("/topics/:topicId", requireAuth, async (req, res, next) => {
   try {
     const { topicId } = req.params;
 
-    const topic = await Topic.findById(topicId).catch(() => null);
-    if (!topic) {
+    const owned = await findOwnedTopic(topicId, req.user._id);
+    if (!owned) {
       return res.status(404).json({ detail: "Topic not found" });
     }
+    const { topic, unit } = owned;
 
     if (!topic.content) {
-      const unit = await Unit.findById(topic.unitId);
-
       const context = new AgentContext({
         userId: req.user._id.toString(),
-        courseId: unit ? unit.courseId.toString() : "",
+        courseId: unit.courseId.toString(),
         topicId: topicId.toString(),
       });
       context.set("topic_title", topic.title);
@@ -222,6 +238,9 @@ router.get("/topics/:topicId", requireAuth, async (req, res, next) => {
 router.post("/topics/:topicId/complete", requireAuth, async (req, res, next) => {
   try {
     const { topicId } = req.params;
+    if (!(await findOwnedTopic(topicId, req.user._id))) {
+      return res.status(404).json({ detail: "Topic not found" });
+    }
     await updateProgress(req.user._id, topicId, "completed");
     return res.json({ status: "completed", topic_id: topicId });
   } catch (err) {

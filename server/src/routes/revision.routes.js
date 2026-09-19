@@ -1,8 +1,9 @@
 const express = require("express");
-const { RevisionLog, Course } = require("../models");
+const { RevisionLog } = require("../models");
 const { requireAuth } = require("../middleware/auth.middleware");
 const vectorStore = require("../services/vectorStore");
 const llmService = require("../services/llmService");
+const { findOwnedCourse } = require("../services/ownership");
 
 const router = express.Router();
 
@@ -35,7 +36,7 @@ router.post("/generate", requireAuth, async (req, res, next) => {
   try {
     const { course_id: courseId, revision_type: revisionType = "cheat_sheet", topic } = req.body;
 
-    const course = await Course.findOne({ _id: courseId, userId: req.user._id }).catch(() => null);
+    const course = await findOwnedCourse(courseId, req.user._id);
     if (!course) {
       return res.status(404).json({ detail: "Course not found" });
     }
@@ -75,6 +76,10 @@ router.post("/generate", requireAuth, async (req, res, next) => {
 // GET /revision/:courseId
 router.get("/:courseId", requireAuth, async (req, res, next) => {
   try {
+    if (!(await findOwnedCourse(req.params.courseId, req.user._id))) {
+      return res.status(404).json({ detail: "Course not found" });
+    }
+
     const logs = await RevisionLog.find({ courseId: req.params.courseId }).sort({ createdAt: -1 });
     return res.json(
       logs.map((log) => ({

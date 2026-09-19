@@ -1,8 +1,9 @@
 const express = require("express");
-const { Flashcard, Course } = require("../models");
+const { Flashcard } = require("../models");
 const { requireAuth } = require("../middleware/auth.middleware");
 const vectorStore = require("../services/vectorStore");
 const llmService = require("../services/llmService");
+const { findOwnedCourse, findOwnedFlashcard } = require("../services/ownership");
 
 const router = express.Router();
 
@@ -44,7 +45,7 @@ router.post("/generate", requireAuth, async (req, res, next) => {
   try {
     const { course_id: courseId, topic, num_cards: numCards = 10 } = req.body;
 
-    const course = await Course.findOne({ _id: courseId, userId: req.user._id }).catch(() => null);
+    const course = await findOwnedCourse(courseId, req.user._id);
     if (!course) {
       return res.status(404).json({ detail: "Course not found" });
     }
@@ -90,6 +91,10 @@ router.get("/:courseId", requireAuth, async (req, res, next) => {
     const { courseId } = req.params;
     const { due_only: dueOnly } = req.query;
 
+    if (!(await findOwnedCourse(courseId, req.user._id))) {
+      return res.status(404).json({ detail: "Course not found" });
+    }
+
     const query = { courseId };
     if (dueOnly === "true") {
       query.nextReview = { $lte: new Date() };
@@ -107,10 +112,11 @@ router.post("/review", requireAuth, async (req, res, next) => {
   try {
     const { flashcard_id: flashcardId, quality } = req.body;
 
-    const fc = await Flashcard.findById(flashcardId).catch(() => null);
-    if (!fc) {
+    const owned = await findOwnedFlashcard(flashcardId, req.user._id);
+    if (!owned) {
       return res.status(404).json({ detail: "Flashcard not found" });
     }
+    const fc = owned.flashcard;
 
     if (quality >= 3) {
       if (fc.repetitions === 0) {
@@ -145,11 +151,11 @@ router.post("/review", requireAuth, async (req, res, next) => {
 // DELETE /flashcards/:flashcardId
 router.delete("/:flashcardId", requireAuth, async (req, res, next) => {
   try {
-    const fc = await Flashcard.findById(req.params.flashcardId).catch(() => null);
-    if (!fc) {
+    const owned = await findOwnedFlashcard(req.params.flashcardId, req.user._id);
+    if (!owned) {
       return res.status(404).json({ detail: "Flashcard not found" });
     }
-    await Flashcard.deleteOne({ _id: fc._id });
+    await Flashcard.deleteOne({ _id: owned.flashcard._id });
     return res.json({ message: "Flashcard deleted" });
   } catch (err) {
     next(err);

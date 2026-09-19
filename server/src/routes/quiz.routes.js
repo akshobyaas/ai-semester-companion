@@ -1,8 +1,9 @@
 const express = require("express");
-const { Quiz, QuizAttempt, Topic, Unit, UserProgress } = require("../models");
+const { Quiz, QuizAttempt, UserProgress } = require("../models");
 const { requireAuth } = require("../middleware/auth.middleware");
 const { agentRuntime } = require("../agents");
 const { AgentContext } = require("../agents/base");
+const { findOwnedCourse, findOwnedTopic, findOwnedQuiz } = require("../services/ownership");
 
 const router = express.Router();
 
@@ -16,16 +17,16 @@ router.post("/generate", requireAuth, async (req, res, next) => {
       question_types: questionTypes = ["mcq", "short_answer"],
     } = req.body;
 
-    const topic = await Topic.findById(topicId).catch(() => null);
-    if (!topic) {
+    const owned = await findOwnedTopic(topicId, req.user._id);
+    if (!owned) {
       return res.status(404).json({ detail: "Topic not found" });
     }
-    const unit = await Unit.findById(topic.unitId);
+    const { topic, unit } = owned;
 
     const context = new AgentContext({
       userId: req.user._id.toString(),
-      courseId: unit ? unit.courseId.toString() : "",
-      topicId: topicId.toString(),
+      courseId: unit.courseId.toString(),
+      topicId: topic._id.toString(),
     });
     context.set("topic_title", topic.title);
     context.set("num_questions", numQuestions);
@@ -65,11 +66,11 @@ router.post("/generate", requireAuth, async (req, res, next) => {
 // GET /quiz/:quizId
 router.get("/:quizId", requireAuth, async (req, res, next) => {
   try {
-    const quiz = await Quiz.findById(req.params.quizId).catch(() => null);
-    if (!quiz) {
+    const owned = await findOwnedQuiz(req.params.quizId, req.user._id);
+    if (!owned) {
       return res.status(404).json({ detail: "Quiz not found" });
     }
-    return res.json(quizResponse(quiz));
+    return res.json(quizResponse(owned.quiz));
   } catch (err) {
     next(err);
   }
@@ -80,14 +81,12 @@ router.post("/submit", requireAuth, async (req, res, next) => {
   try {
     const { quiz_id: quizId, answers = [], time_taken_seconds: timeTakenSeconds } = req.body;
 
-    const quiz = await Quiz.findById(quizId).catch(() => null);
-    if (!quiz) {
+    const owned = await findOwnedQuiz(quizId, req.user._id);
+    if (!owned) {
       return res.status(404).json({ detail: "Quiz not found" });
     }
-
-    const topic = await Topic.findById(quiz.topicId);
-    const unit = topic ? await Unit.findById(topic.unitId) : null;
-    const courseId = unit ? unit.courseId : null;
+    const { quiz, topic, unit } = owned;
+    const courseId = unit.courseId;
 
     // ANSWER-INDEXING QUIRK (flagged in Phase 0, resolved more robustly here):
     // the Python original builds the index map from `quiz.questions.index(...)`
@@ -111,8 +110,8 @@ router.post("/submit", requireAuth, async (req, res, next) => {
 
     const context = new AgentContext({
       userId: req.user._id.toString(),
-      courseId: courseId ? courseId.toString() : "",
-      topicId: topic ? topic._id.toString() : "",
+      courseId: courseId.toString(),
+      topicId: topic._id.toString(),
     });
     context.set(
       "questions",
@@ -125,7 +124,7 @@ router.post("/submit", requireAuth, async (req, res, next) => {
       }))
     );
     context.set("user_answers", userAnswers);
-    context.set("topic_title", topic ? topic.title : "");
+    context.set("topic_title", topic.title);
 
     const evalAgent = agentRuntime.getAgent("evaluation_agent");
     const evalResult = await evalAgent.run(context);
@@ -155,7 +154,7 @@ router.post("/submit", requireAuth, async (req, res, next) => {
     // submitted without ever having viewed the topic first via the lazy
     // GET /learning/topics/:id flow). Matches the Python `if progress:`
     // with no else branch.
-    const progress = await UserProgress.findOne({ userId: req.user._id, topicId: topic ? topic._id : null });
+    const progress = await UserProgress.findOne({ userId: req.user._id, topicId: topic._id });
     if (progress) {
       progress.score = Math.max(progress.score, evalResult.data.percentage || 0);
       progress.weakAreas = evalResult.data.weak_areas || []; // overwritten, not accumulated
@@ -171,6 +170,10 @@ router.post("/submit", requireAuth, async (req, res, next) => {
 // GET /quiz/attempts/:courseId
 router.get("/attempts/:courseId", requireAuth, async (req, res, next) => {
   try {
+    if (!(await findOwnedCourse(req.params.courseId, req.user._id))) {
+      return res.status(404).json({ detail: "Course not found" });
+    }
+
     const attempts = await QuizAttempt.find({ courseId: req.params.courseId, userId: req.user._id }).sort({
       completedAt: -1,
     });

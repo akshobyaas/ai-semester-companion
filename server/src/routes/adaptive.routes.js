@@ -3,34 +3,47 @@ const { ChatMessage, Topic, Unit, UserProgress, QuizAttempt } = require("../mode
 const { requireAuth } = require("../middleware/auth.middleware");
 const { agentRuntime } = require("../agents");
 const { AgentContext } = require("../agents/base");
+const { findOwnedCourse, findOwnedTopic } = require("../services/ownership");
 
 const router = express.Router();
 
 // POST /adaptive/doubt
 router.post("/doubt", requireAuth, async (req, res, next) => {
   try {
-    const { message, topic_id: topicId } = req.body;
+    const { message, topic_id: topicId, course_id: bodyCourseId } = req.body;
     if (!message || !message.trim()) {
       return res.status(422).json({ detail: "message is required" });
     }
-
-    // Resolve topic_title + course_id via Topic -> Unit, exactly like the
-    // Python route (verified against source, not assumed) — an earlier
-    // draft of this port incorrectly skipped this lookup.
-    let topicTitle = "";
-    let courseId = "";
-    if (topicId) {
-      const topic = await Topic.findById(topicId).catch(() => null);
-      if (topic) {
-        topicTitle = topic.title;
-        const unit = await Unit.findById(topic.unitId);
-        if (unit) courseId = unit.courseId.toString();
-      }
+    if (!topicId && !bodyCourseId) {
+      return res.status(422).json({ detail: "course_id or topic_id is required" });
     }
 
-    const recentDesc = await ChatMessage.find({ userId: req.user._id, topicId: topicId || null })
-      .sort({ createdAt: -1 })
-      .limit(10);
+    // Retrieval is scoped by course, so a course must always be resolved —
+    // either from the topic (Topic -> Unit -> Course) or passed directly.
+    // Both paths verify the course belongs to the caller.
+    let topicTitle = "";
+    let courseId;
+    if (topicId) {
+      const owned = await findOwnedTopic(topicId, req.user._id);
+      if (!owned) {
+        return res.status(404).json({ detail: "Topic not found" });
+      }
+      topicTitle = owned.topic.title;
+      courseId = owned.course._id.toString();
+    } else {
+      const course = await findOwnedCourse(bodyCourseId, req.user._id);
+      if (!course) {
+        return res.status(404).json({ detail: "Course not found" });
+      }
+      courseId = course._id.toString();
+    }
+
+    // Topic chats keep per-topic history; course-level chats keep per-course
+    // history, so two courses' conversations never bleed into each other.
+    const historyFilter = topicId
+      ? { userId: req.user._id, topicId }
+      : { userId: req.user._id, topicId: null, courseId };
+    const recentDesc = await ChatMessage.find(historyFilter).sort({ createdAt: -1 }).limit(10);
     const chatHistory = recentDesc.reverse().map((m) => ({ role: m.role, content: m.content }));
 
     const context = new AgentContext({
@@ -53,9 +66,16 @@ router.post("/doubt", requireAuth, async (req, res, next) => {
 
     const answer = result.data.answer || "I couldn't find an answer to that question.";
 
-    await ChatMessage.create({ userId: req.user._id, topicId: topicId || null, role: "user", content: message });
     await ChatMessage.create({
       userId: req.user._id,
+      courseId,
+      topicId: topicId || null,
+      role: "user",
+      content: message,
+    });
+    await ChatMessage.create({
+      userId: req.user._id,
+      courseId,
       topicId: topicId || null,
       role: "assistant",
       content: answer,
@@ -72,6 +92,10 @@ router.post("/doubt", requireAuth, async (req, res, next) => {
 router.get("/recommend/:courseId", requireAuth, async (req, res, next) => {
   try {
     const { courseId } = req.params;
+
+    if (!(await findOwnedCourse(courseId, req.user._id))) {
+      return res.status(404).json({ detail: "Course not found" });
+    }
 
     // QUIRK PRESERVED (flagged, not silently scoped): the Python route
     // queries recent quiz attempts and progress records by user_id ONLY —
@@ -133,6 +157,10 @@ router.get("/recommend/:courseId", requireAuth, async (req, res, next) => {
 router.get("/analytics/:courseId", requireAuth, async (req, res, next) => {
   try {
     const { courseId } = req.params;
+
+    if (!(await findOwnedCourse(courseId, req.user._id))) {
+      return res.status(404).json({ detail: "Course not found" });
+    }
 
     const unitIds = await Unit.find({ courseId }).distinct("_id");
     const courseTopics = await Topic.find({ unitId: { $in: unitIds } });
