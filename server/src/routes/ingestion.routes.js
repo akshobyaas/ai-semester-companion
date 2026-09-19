@@ -9,6 +9,7 @@ const { upload } = require("../middleware/upload.middleware");
 const { agentRuntime } = require("../agents");
 const { AgentContext } = require("../agents/base");
 const { LearningPhase } = require("../agents/runtime");
+const vectorStore = require("../services/vectorStore");
 
 const router = express.Router();
 const UPLOAD_DIR = process.env.UPLOAD_DIR || "./data/uploads";
@@ -148,19 +149,31 @@ router.post("/courses/:courseId/process", requireAuth, async (req, res, next) =>
       LearningPhase.ROADMAP_GENERATION,
     ];
 
+    // A previous run that failed after ingestion already stored these
+    // documents' chunks. Clear them so the retry doesn't duplicate them.
+    const unprocessedIds = unprocessedDocs.map((d) => d._id);
+    await vectorStore.deleteDocumentChunks(unprocessedIds);
+
     const results = await agentRuntime.executePipeline(pipelinePhases, context);
 
-    // QUIRK PRESERVED FROM ORIGINAL, FLAGGED NOT HIDDEN: the Python route
-    // marks every document `processed = True` and commits UNCONDITIONALLY,
-    // even if the pipeline failed partway through (e.g. only INGESTION
-    // succeeded and KNOWLEDGE_EXTRACTION errored). That means a partially
-    // failed run still gets marked "done" and won't be retried by a future
-    // /process call. Kept exactly as-is per this project's rule of
-    // replicating real behavior rather than silently "fixing" it — but
-    // flagging it here because it's the kind of thing worth deciding
-    // deliberately (e.g. only mark processed on full pipeline success)
-    // rather than inheriting by accident.
-    await Document.updateMany({ _id: { $in: unprocessedDocs.map((d) => d._id) } }, { processed: true });
+    const pipelineResults = {};
+    for (const [phase, result] of Object.entries(results)) {
+      pipelineResults[phase] = { success: result.success, error: result.error };
+    }
+
+    // DEVIATION FROM THE PYTHON ORIGINAL: it marked every document
+    // `processed = True` even when the pipeline failed partway. A student
+    // whose run hit a temporary LLM error was then stuck — a retry answered
+    // "No unprocessed documents found" and no roadmap ever appeared. Now a
+    // failed run leaves the documents unprocessed, so it can simply be retried.
+    const failedPhase = Object.entries(results).find(([, result]) => !result.success);
+    if (failedPhase) {
+      const [phaseName, result] = failedPhase;
+      return res.status(502).json({
+        detail: `Processing failed at ${phaseName}: ${result.error}`,
+        pipeline_results: pipelineResults,
+      });
+    }
 
     const roadmapData = context.get("roadmap_agent.roadmap", {});
 
@@ -174,29 +187,12 @@ router.post("/courses/:courseId/process", requireAuth, async (req, res, next) =>
     // permanently non-functional after /process, since no Topic document
     // would ever exist to look up. This gap is severe enough (breaks the
     // entire app past ingestion) that it's addressed here deliberately,
-    // not silently — only runs when ROADMAP_GENERATION actually succeeded.
-    if (results[LearningPhase.ROADMAP_GENERATION] && results[LearningPhase.ROADMAP_GENERATION].success) {
-      await persistRoadmap(course._id, roadmapData);
-    }
+    // not silently — only runs when the whole pipeline succeeded.
+    await persistRoadmap(course._id, roadmapData);
 
-    const pipelineResults = {};
-    for (const [phase, result] of Object.entries(results)) {
-      pipelineResults[phase] = { success: result.success, error: result.error };
-    }
-
-    // The route was previously returning 200 unconditionally, even when a
-    // phase failed (e.g. the Gemini API call erroring) — the frontend then
-    // showed a false "Roadmap ready!" success message. Surface a real
-    // error status here, with the actual failing phase's message, when any
-    // phase in the pipeline didn't succeed.
-    const failedPhase = Object.entries(results).find(([, result]) => !result.success);
-    if (failedPhase) {
-      const [phaseName, result] = failedPhase;
-      return res.status(502).json({
-        detail: `Processing failed at ${phaseName}: ${result.error}`,
-        pipeline_results: pipelineResults,
-      });
-    }
+    // Marked processed only once everything above has been saved, so any
+    // failure before this point leaves the run retryable.
+    await Document.updateMany({ _id: { $in: unprocessedIds } }, { processed: true });
 
     return res.json({
       status: "success",

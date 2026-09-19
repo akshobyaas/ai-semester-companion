@@ -73,4 +73,13 @@ async function deleteCourseIndex(courseId) {
   await Chunk.deleteMany({ courseId });
 }
 
-module.exports = { addDocuments, search, deleteCourseIndex };
+/**
+ * Removes the chunks of specific documents. Used before (re)processing so a
+ * retry after a partly failed run doesn't leave duplicate chunks behind.
+ */
+async function deleteDocumentChunks(documentIds) {
+  if (!documentIds.length) return;
+  await Chunk.deleteMany({ documentId: { $in: documentIds } });
+}
+
+module.exports = { addDocuments, search, deleteCourseIndex, deleteDocumentChunks };

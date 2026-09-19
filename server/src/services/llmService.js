@@ -22,7 +22,13 @@ const { createClient } = require("redis");
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o";
 const CACHE_TTL_SECONDS = 3600; // matches Python's setex(..., 3600, ...)
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+// The SDK retries 429/5xx responses with exponential backoff (default 2
+// retries). Providers such as Gemini return short "high demand" 503 spikes,
+// so allow a couple more before surfacing the error to the student.
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+  maxRetries: parseInt(process.env.LLM_MAX_RETRIES || "4", 10),
+});
 
 let redisClient = null;
 let redisConnecting = null;
